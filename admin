@@ -1,0 +1,406 @@
+#include "../include/VotingSystem.h"
+
+AdminPanel::AdminPanel(DatabaseManager& db, int adminId) : db(db), adminId(adminId) {}
+
+void AdminPanel::run() {
+    while (true) {
+        printHeader("ADMIN CONTROL PANEL");
+        setColor(CLR_YELLOW); std::cout << "  Logged in as: Administrator\n\n"; resetColor();
+        setColor(CLR_WHITE);
+        std::cout << "  [1]  Manage Elections\n";
+        std::cout << "  [2]  Manage Candidates\n";
+        std::cout << "  [3]  Manage Voters\n";
+        std::cout << "  [4]  View Vote Results\n";
+        std::cout << "  [5]  View Audit Log\n";
+        std::cout << "  [6]  Anti-Cheat / Fraud Inquiry\n";
+        std::cout << "  [0]  Logout\n\n";
+        resetColor();
+        setColor(CLR_CYAN); std::cout << "  Enter choice: "; resetColor();
+        int choice; std::cin >> choice; std::cin.ignore(10000,'\n');
+        switch(choice){
+            case 1: manageElections();  break;
+            case 2: manageCandidates(); break;
+            case 3: manageVoters();     break;
+            case 4: viewResults();      break;
+            case 5: viewAuditLog();     break;
+            case 6: antiCheatInquiry(); break;
+            case 0: return;
+            default: printError("Invalid choice."); pressAnyKey();
+        }
+    }
+}
+
+void AdminPanel::manageElections() {
+    while (true) {
+        printHeader("ELECTION MANAGEMENT");
+        auto elections = db.getAllElections();
+        if (elections.empty()) {
+            printWarning("No elections found.");
+        } else {
+            setColor(CLR_CYAN);
+            std::cout << "  " << std::left
+                      << std::setw(5)  << "ID"
+                      << std::setw(35) << "Title"
+                      << std::setw(15) << "Constituency"
+                      << "Status\n";
+            std::cout << "  " << std::string(67,'-') << "\n";
+            resetColor();
+            for (auto& e : elections) {
+                if      (e.status=="ACTIVE") setColor(CLR_GREEN);
+                else if (e.status=="CLOSED") setColor(CLR_RED);
+                else                         setColor(CLR_WHITE);
+                std::cout << "  " << std::left
+                          << std::setw(5)  << e.id
+                          << std::setw(35) << e.title.substr(0,33)
+                          << std::setw(15) << e.constituency.substr(0,13)
+                          << e.status << "\n";
+                resetColor();
+            }
+        }
+        std::cout << "\n";
+        setColor(CLR_WHITE);
+        std::cout << "  [1] Add New Election\n";
+        std::cout << "  [2] Change Election Status\n";
+        std::cout << "  [3] Delete Election (UPCOMING only)\n";
+        std::cout << "  [0] Back\n\n";
+        resetColor();
+        setColor(CLR_CYAN); std::cout << "  Choice: "; resetColor();
+        int c; std::cin >> c; std::cin.ignore(10000,'\n');
+        switch(c){
+            case 1: addElection(); break;
+            case 2: changeElectionStatus(); break;
+            case 3: {
+                setColor(CLR_CYAN); std::cout << "  Election ID to delete: "; resetColor();
+                int id; std::cin >> id; std::cin.ignore(10000,'\n');
+                if (db.deleteElection(id)) printSuccess("Election deleted.");
+                else printError("Cannot delete - may be ACTIVE/CLOSED or has votes.");
+                pressAnyKey(); break;
+            }
+            case 0: return;
+        }
+    }
+}
+
+void AdminPanel::addElection() {
+    printHeader("ADD NEW ELECTION");
+    std::string title, desc, constituency, startDate, endDate;
+    setColor(CLR_CYAN); std::cout << "  " << std::left << std::setw(22) << "Title"       << ":  "; resetColor(); std::getline(std::cin, title);
+    setColor(CLR_CYAN); std::cout << "  " << std::left << std::setw(22) << "Description" << ":  "; resetColor(); std::getline(std::cin, desc);
+    constituency = selectConstituency();
+    setColor(CLR_CYAN); std::cout << "  " << std::left << std::setw(22) << "Start (YYYY-MM-DD HH:MM:SS)" << ":  "; resetColor(); std::getline(std::cin, startDate);
+    setColor(CLR_CYAN); std::cout << "  " << std::left << std::setw(22) << "End   (YYYY-MM-DD HH:MM:SS)" << ":  "; resetColor(); std::getline(std::cin, endDate);
+    if (db.addElection(title, desc, constituency, startDate, endDate, adminId)) {
+        printSuccess("Election added!");
+        db.logEvent("ELECTION_ADDED","ADMIN",adminId,"Added: "+title);
+    } else printError("Failed to add election.");
+    pressAnyKey();
+}
+
+void AdminPanel::changeElectionStatus() {
+    setColor(CLR_CYAN); std::cout << "\n  Election ID : "; resetColor();
+    int id; std::cin >> id; std::cin.ignore(10000,'\n');
+    setColor(CLR_WHITE); std::cout << "  [1] UPCOMING  [2] ACTIVE  [3] CLOSED\n"; resetColor();
+    setColor(CLR_CYAN); std::cout << "  Choice: "; resetColor();
+    int c; std::cin >> c; std::cin.ignore(10000,'\n');
+    std::string status = (c==1?"UPCOMING":c==2?"ACTIVE":"CLOSED");
+    if (db.updateElectionStatus(id, status)) {
+        printSuccess("Status updated to " + status);
+        db.logEvent("STATUS_CHANGE","ADMIN",adminId,
+                    "Election #"+std::to_string(id)+" -> "+status);
+    } else printError("Update failed.");
+    pressAnyKey();
+}
+
+void AdminPanel::manageCandidates() {
+    while (true) {
+        printHeader("CANDIDATE MANAGEMENT");
+        auto elections = db.getAllElections();
+        if (elections.empty()) { printWarning("No elections. Add one first."); pressAnyKey(); return; }
+
+        setColor(CLR_CYAN); std::cout << "  Enter Election ID: "; resetColor();
+        int eid; std::cin >> eid; std::cin.ignore(10000,'\n');
+
+        auto candidates = db.getCandidatesByElection(eid);
+        std::cout << "\n";
+        if (candidates.empty()) {
+            printWarning("No candidates yet.");
+        } else {
+            setColor(CLR_CYAN);
+            std::cout << "  " << std::left
+                      << std::setw(5)  << "ID"
+                      << std::setw(25) << "Name"
+                      << std::setw(25) << "Party"
+                      << std::setw(20) << "NID"
+                      << "Constituency\n";
+            std::cout << "  " << std::string(85,'-') << "\n";
+            resetColor();
+            for (auto& c : candidates) {
+                setColor(CLR_WHITE);
+                std::cout << "  " << std::left
+                          << std::setw(5)  << c.id
+                          << std::setw(25) << c.fullName.substr(0,23)
+                          << std::setw(25) << c.partyName.substr(0,23)
+                          << std::setw(20) << c.nidNumber
+                          << c.constituency.substr(0,13) << "\n";
+                resetColor();
+            }
+        }
+        std::cout << "\n";
+        setColor(CLR_WHITE);
+        std::cout << "  [1] Add Candidate\n  [2] Remove Candidate\n  [0] Back\n\n";
+        resetColor();
+        setColor(CLR_CYAN); std::cout << "  Choice: "; resetColor();
+        int c; std::cin >> c; std::cin.ignore(10000,'\n');
+        if      (c==1) addCandidate();
+        else if (c==2) removeCandidate();
+        else           return;
+    }
+}
+
+void AdminPanel::addCandidate() {
+    printHeader("ADD CANDIDATE");
+    Candidate c;
+    setColor(CLR_CYAN); std::cout << "  " << std::left << std::setw(22) << "Election ID" << ":  "; resetColor();
+    std::cin >> c.electionId; std::cin.ignore(10000,'\n');
+
+    c.fullName  = readValidatedName("Full Name");
+    c.nidNumber = readValidatedNID("NID Number");
+
+    if (db.candidateExists(c.nidNumber)) {
+        printError("NID already registered as a candidate!");
+        pressAnyKey(); return;
+    }
+
+    setColor(CLR_CYAN); std::cout << "  " << std::left << std::setw(22) << "Party Name"   << ":  "; resetColor(); std::getline(std::cin, c.partyName);
+    setColor(CLR_CYAN); std::cout << "  " << std::left << std::setw(22) << "Party Symbol" << ":  "; resetColor(); std::getline(std::cin, c.partySymbol);
+
+    c.constituency = selectConstituency();
+    c.dob          = readValidatedDOB("Date of Birth", 18);
+    c.address      = readValidatedAddress("Address");
+    c.phone        = readValidatedPhone("Phone");
+
+    if (db.addCandidate(c)) {
+        printSuccess("Candidate added!");
+        db.logEvent("CANDIDATE_ADDED","ADMIN",adminId,
+                    "Added: "+c.fullName+" ("+c.partyName+")");
+    } else printError("Failed to add candidate.");
+    pressAnyKey();
+}
+
+void AdminPanel::removeCandidate() {
+    setColor(CLR_CYAN); std::cout << "\n  Candidate ID to remove: "; resetColor();
+    int id; std::cin >> id; std::cin.ignore(10000,'\n');
+    setColor(CLR_YELLOW); std::cout << "  Confirm? (y/n): "; resetColor();
+    std::string ans; std::getline(std::cin, ans);
+    if (ans=="y" || ans=="Y") {
+        if (db.removeCandidate(id)) {
+            printSuccess("Candidate removed.");
+            db.logEvent("CANDIDATE_REMOVED","ADMIN",adminId,
+                        "Removed candidate #"+std::to_string(id));
+        } else printError("Failed to remove candidate.");
+    }
+    pressAnyKey();
+}
+
+void AdminPanel::manageVoters() {
+    while (true) {
+        printHeader("VOTER MANAGEMENT");
+        auto voters = db.getAllVoters();
+        if (voters.empty()) {
+            printWarning("No voters registered.");
+        } else {
+            setColor(CLR_CYAN);
+            std::cout << "  Total Registered Voters: " << voters.size() << "\n\n";
+            std::cout << "  " << std::left
+                      << std::setw(6)  << "ID"
+                      << std::setw(25) << "Name"
+                      << std::setw(20) << "NID"
+                      << std::setw(15) << "Constituency"
+                      << "Status\n";
+            std::cout << "  " << std::string(72,'-') << "\n";
+            resetColor();
+            for (auto& v : voters) {
+                setColor(v.isActive ? CLR_WHITE : CLR_RED);
+                std::cout << "  " << std::left
+                          << std::setw(6)  << v.id
+                          << std::setw(25) << v.fullName.substr(0,23)
+                          << std::setw(20) << v.nidNumber
+                          << std::setw(15) << v.constituency.substr(0,13)
+                          << (v.isActive ? "Active" : "Removed") << "\n";
+                resetColor();
+            }
+        }
+        std::cout << "\n";
+        setColor(CLR_WHITE);
+        std::cout << "  [1] Add Voter\n  [2] Remove Voter\n  [0] Back\n\n";
+        resetColor();
+        setColor(CLR_CYAN); std::cout << "  Choice: "; resetColor();
+        int c; std::cin >> c; std::cin.ignore(10000,'\n');
+        if      (c==1) addVoter();
+        else if (c==2) removeVoter();
+        else           return;
+    }
+}
+
+void AdminPanel::addVoter() {
+    printHeader("REGISTER VOTER");
+    Voter v; std::string password;
+
+    v.fullName    = readValidatedName("Full Name");
+    v.nidNumber   = readValidatedNID("NID Number");
+
+    if (db.voterExists(v.nidNumber)) {
+        printError("NID already registered!");
+        pressAnyKey(); return;
+    }
+
+    v.dob          = readValidatedDOB("Date of Birth", 18);
+    v.constituency = selectConstituency();
+    v.address      = readValidatedAddress("Address");
+    v.phone        = readValidatedPhone("Phone");
+    password       = readPasswordMasked("Password");
+
+    if (db.registerVoter(v, password)) {
+        printSuccess("Voter registered! NID: " + v.nidNumber);
+        db.logEvent("VOTER_REGISTERED","ADMIN",adminId,"Registered: "+v.fullName);
+    } else printError("Registration failed.");
+    pressAnyKey();
+}
+
+void AdminPanel::removeVoter() {
+    setColor(CLR_CYAN); std::cout << "\n  Voter ID to remove: "; resetColor();
+    int id; std::cin >> id; std::cin.ignore(10000,'\n');
+    setColor(CLR_YELLOW); std::cout << "  Confirm? (y/n): "; resetColor();
+    std::string ans; std::getline(std::cin, ans);
+    if (ans=="y" || ans=="Y") {
+        if (db.removeVoter(id)) {
+            printSuccess("Voter deactivated.");
+            db.logEvent("VOTER_REMOVED","ADMIN",adminId,
+                        "Removed voter #"+std::to_string(id));
+        } else printError("Failed.");
+    }
+    pressAnyKey();
+}
+
+void AdminPanel::viewResults() {
+    printHeader("VOTE RESULTS");
+    auto elections = db.getAllElections();
+    if (elections.empty()) { printWarning("No elections."); pressAnyKey(); return; }
+
+    for (auto& e : elections) {
+        setColor(CLR_WHITE);
+        std::cout << "  [" << e.id << "] " << e.title << " (" << e.status << ")\n";
+        resetColor();
+    }
+
+    setColor(CLR_CYAN); std::cout << "\n  Enter Election ID: "; resetColor();
+    int eid; std::cin >> eid; std::cin.ignore(10000,'\n');
+
+    auto results   = db.getResults(eid);
+    int totalVotes = db.getTotalVotesCast(eid);
+
+    printHeader("ELECTION RESULTS");
+    setColor(CLR_YELLOW);
+    std::cout << "  Total Votes Cast: " << totalVotes << "\n\n";
+    resetColor();
+
+    if (results.empty()) { printWarning("No votes cast yet."); pressAnyKey(); return; }
+
+    setColor(CLR_CYAN);
+    std::cout << "  " << std::left
+              << std::setw(6)  << "Rank"
+              << std::setw(25) << "Candidate"
+              << std::setw(25) << "Party"
+              << std::setw(8)  << "Votes"
+              << "%\n";
+    std::cout << "  " << std::string(70,'-') << "\n";
+    resetColor();
+
+    int rank = 1;
+    for (auto& r : results) {
+        if (rank==1) setColor(CLR_YELLOW); else setColor(CLR_WHITE);
+        int barLen = (int)(r.percentage / 2.5);
+        std::string bar(barLen, '|');
+        std::cout << "  " << std::left
+                  << std::setw(6)  << rank
+                  << std::setw(25) << r.candidateName.substr(0,23)
+                  << std::setw(25) << r.partyName.substr(0,23)
+                  << std::setw(8)  << r.totalVotes
+                  << r.percentage  << "%  " << bar << "\n";
+        resetColor();
+        rank++;
+    }
+    setColor(CLR_GREEN);
+    std::cout << "\n  *** WINNER: " << results[0].candidateName
+              << " (" << results[0].partyName << ") ***\n";
+    resetColor();
+    pressAnyKey();
+}
+
+void AdminPanel::viewAuditLog() {
+    printHeader("AUDIT LOG (Last 50 Events)");
+    auto logs = db.getAuditLog(50);
+    if (logs.empty()) { printWarning("No audit entries."); pressAnyKey(); return; }
+
+    setColor(CLR_CYAN);
+    std::cout << "  " << std::left
+              << std::setw(6)  << "ID"
+              << std::setw(22) << "Event"
+              << std::setw(10) << "UserType"
+              << std::setw(40) << "Description"
+              << "Time\n";
+    std::cout << "  " << std::string(95,'-') << "\n";
+    resetColor();
+
+    for (auto& e : logs) {
+        if      (e.eventType.find("VOTE")  !=std::string::npos) setColor(CLR_GREEN);
+        else if (e.eventType.find("REMOVE")!=std::string::npos) setColor(CLR_RED);
+        else if (e.eventType.find("FAILED")!=std::string::npos) setColor(CLR_YELLOW);
+        else setColor(CLR_WHITE);
+        std::string desc = e.description.size()>38 ? e.description.substr(0,38) : e.description;
+        std::cout << "  " << std::left
+                  << std::setw(6)  << e.logId
+                  << std::setw(22) << e.eventType.substr(0,20)
+                  << std::setw(10) << e.userType.substr(0,8)
+                  << std::setw(40) << desc
+                  << e.loggedAt << "\n";
+        resetColor();
+    }
+    pressAnyKey();
+}
+
+void AdminPanel::antiCheatInquiry() {
+    printHeader("ANTI-CHEAT / FRAUD INQUIRY");
+    setColor(CLR_YELLOW); std::cout << "  Scanning for suspicious activity...\n\n"; resetColor();
+
+    auto suspicious = db.getSuspiciousActivity();
+    if (suspicious.empty()) {
+        setColor(CLR_GREEN);
+        std::cout << "  No suspicious activity detected. Election integrity intact.\n";
+        resetColor();
+    } else {
+        setColor(CLR_RED);
+        std::cout << "  *** SUSPICIOUS ACTIVITY DETECTED ***\n\n";
+        resetColor();
+        setColor(CLR_CYAN);
+        std::cout << "  " << std::left
+                  << std::setw(22) << "Incident Type"
+                  << std::setw(50) << "Description"
+                  << "Time\n";
+        std::cout << "  " << std::string(90,'-') << "\n";
+        resetColor();
+        for (auto& e : suspicious) {
+            setColor(CLR_RED);
+            std::string desc = e.description.size()>48 ? e.description.substr(0,48) : e.description;
+            std::cout << "  " << std::left
+                      << std::setw(22) << e.eventType.substr(0,20)
+                      << std::setw(50) << desc
+                      << e.loggedAt << "\n";
+            resetColor();
+        }
+        setColor(CLR_YELLOW);
+        std::cout << "\n  Recommendation: Review flagged entries and cross-check voter records.\n";
+        resetColor();
+    }
+    pressAnyKey();
+}
