@@ -1,0 +1,271 @@
+// ============================================================
+//   BANGLADESH ONLINE VOTING SYSTEM
+//   AdminPanel Implementation
+// ============================================================
+#include "../include/VotingSystem.h"
+#include <stdexcept>
+#include <cstring>
+
+// ============================================================
+//  Admin Login
+// ============================================================
+bool DatabaseManager::adminLogin(const std::string& username, const std::string& password) {
+    std::string hash = sha256(password);
+    std::string sql  = "SELECT admin_id FROM admins WHERE username='" + username +
+                       "' AND password_hash='" + hash + "'";
+    SQLHSTMT hStmt;
+    SQLAllocHandle(SQL_HANDLE_STMT, hDbc, &hStmt);
+    SQLRETURN ret = SQLExecDirect(hStmt, (SQLCHAR*)sql.c_str(), SQL_NTS);
+    bool found = false;
+    if (ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO)
+        found = (SQLFetch(hStmt) == SQL_SUCCESS);
+    SQLFreeHandle(SQL_HANDLE_STMT, hStmt);
+    return found;
+}
+
+// ============================================================
+//  Elections Management
+// ============================================================
+bool DatabaseManager::addElection(const std::string& title, const std::string& desc,
+                                  const std::string& constituency,
+                                  const std::string& startDate, const std::string& endDate,
+                                  int adminId) {
+    std::string sql = "INSERT INTO elections (title,description,constituency,start_date,end_date,status,created_by) "
+                      "VALUES ('" + title + "','" + desc + "','" + constituency + "','" +
+                      startDate + "','" + endDate + "','UPCOMING'," + std::to_string(adminId) + ")";
+    return executeNonQuery(sql);
+}
+
+std::vector<Election> DatabaseManager::getAllElections() {
+    std::vector<Election> list;
+    SQLHSTMT hStmt;
+    SQLAllocHandle(SQL_HANDLE_STMT, hDbc, &hStmt);
+    std::string sql = "SELECT election_id,title,description,constituency,start_date,end_date,status FROM elections ORDER BY election_id DESC";
+    if (SQLExecDirect(hStmt, (SQLCHAR*)sql.c_str(), SQL_NTS) != SQL_SUCCESS &&
+        SQLExecDirect(hStmt, (SQLCHAR*)sql.c_str(), SQL_NTS) != SQL_SUCCESS_WITH_INFO) {
+        SQLFreeHandle(SQL_HANDLE_STMT, hStmt);
+        return list;
+    }
+    char id[16],title[256],desc[512],con[128],sd[32],ed[32],status[16];
+    SQLLEN len;
+    while (SQLFetch(hStmt) == SQL_SUCCESS) {
+        Election e;
+        SQLGetData(hStmt,1,SQL_C_CHAR,id,   sizeof(id),   &len); e.id           = atoi(id);
+        SQLGetData(hStmt,2,SQL_C_CHAR,title, sizeof(title),&len); e.title        = title;
+        SQLGetData(hStmt,3,SQL_C_CHAR,desc,  sizeof(desc), &len); e.description  = (len==SQL_NULL_DATA)?"":desc;
+        SQLGetData(hStmt,4,SQL_C_CHAR,con,   sizeof(con),  &len); e.constituency = con;
+        SQLGetData(hStmt,5,SQL_C_CHAR,sd,    sizeof(sd),   &len); e.startDate    = sd;
+        SQLGetData(hStmt,6,SQL_C_CHAR,ed,    sizeof(ed),   &len); e.endDate      = ed;
+        SQLGetData(hStmt,7,SQL_C_CHAR,status,sizeof(status),&len);e.status       = status;
+        list.push_back(e);
+    }
+    SQLFreeHandle(SQL_HANDLE_STMT, hStmt);
+    return list;
+}
+
+bool DatabaseManager::updateElectionStatus(int electionId, const std::string& status) {
+    std::string sql = "UPDATE elections SET status='" + status +
+                      "' WHERE election_id=" + std::to_string(electionId);
+    return executeNonQuery(sql);
+}
+
+bool DatabaseManager::deleteElection(int electionId) {
+    std::string sql = "DELETE FROM elections WHERE election_id=" + std::to_string(electionId) +
+                      " AND status='UPCOMING' AND election_id NOT IN (SELECT election_id FROM votes)";
+    return executeNonQuery(sql);
+}
+
+// ============================================================
+//  Candidates Management
+// ============================================================
+bool DatabaseManager::addCandidate(const Candidate& c) {
+    std::string sql = "INSERT INTO candidates (election_id,full_name,nid_number,party_name,"
+                      "party_symbol,constituency,date_of_birth,address,phone) VALUES (" +
+                      std::to_string(c.electionId) + ",'" + c.fullName + "','" + c.nidNumber + "','" +
+                      c.partyName + "','" + c.partySymbol + "','" + c.constituency + "','" +
+                      c.dob + "','" + c.address + "','" + c.phone + "')";
+    return executeNonQuery(sql);
+}
+
+std::vector<Candidate> DatabaseManager::getCandidatesByElection(int electionId) {
+    std::vector<Candidate> list;
+    SQLHSTMT hStmt;
+    SQLAllocHandle(SQL_HANDLE_STMT, hDbc, &hStmt);
+    std::string sql = "SELECT candidate_id,election_id,full_name,nid_number,party_name,"
+                      "party_symbol,constituency,date_of_birth,address,phone,is_active "
+                      "FROM candidates WHERE election_id=" + std::to_string(electionId) +
+                      " AND is_active=1 ORDER BY full_name";
+    if (SQLExecDirect(hStmt,(SQLCHAR*)sql.c_str(),SQL_NTS)!=SQL_SUCCESS &&
+        SQLExecDirect(hStmt,(SQLCHAR*)sql.c_str(),SQL_NTS)!=SQL_SUCCESS_WITH_INFO) {
+        SQLFreeHandle(SQL_HANDLE_STMT,hStmt); return list;
+    }
+    char cid[16],eid[16],fn[256],nid[32],pn[128],psym[64],con[128],dob[32],addr[512],ph[32],act[2];
+    SQLLEN len;
+    while (SQLFetch(hStmt)==SQL_SUCCESS) {
+        Candidate c;
+        SQLGetData(hStmt,1,SQL_C_CHAR,cid, sizeof(cid), &len); c.id         = atoi(cid);
+        SQLGetData(hStmt,2,SQL_C_CHAR,eid, sizeof(eid), &len); c.electionId = atoi(eid);
+        SQLGetData(hStmt,3,SQL_C_CHAR,fn,  sizeof(fn),  &len); c.fullName   = fn;
+        SQLGetData(hStmt,4,SQL_C_CHAR,nid, sizeof(nid), &len); c.nidNumber  = nid;
+        SQLGetData(hStmt,5,SQL_C_CHAR,pn,  sizeof(pn),  &len); c.partyName  = pn;
+        SQLGetData(hStmt,6,SQL_C_CHAR,psym,sizeof(psym),&len); c.partySymbol= psym;
+        SQLGetData(hStmt,7,SQL_C_CHAR,con, sizeof(con), &len); c.constituency=con;
+        SQLGetData(hStmt,8,SQL_C_CHAR,dob, sizeof(dob), &len); c.dob        = dob;
+        SQLGetData(hStmt,9,SQL_C_CHAR,addr,sizeof(addr),&len); c.address    = addr;
+        SQLGetData(hStmt,10,SQL_C_CHAR,ph, sizeof(ph),  &len); c.phone      = ph;
+        SQLGetData(hStmt,11,SQL_C_CHAR,act,sizeof(act), &len); c.isActive   = atoi(act);
+        list.push_back(c);
+    }
+    SQLFreeHandle(SQL_HANDLE_STMT,hStmt);
+    return list;
+}
+
+bool DatabaseManager::updateCandidate(const Candidate& c) {
+    std::string sql = "UPDATE candidates SET full_name='" + c.fullName + "',party_name='" +
+                      c.partyName + "',party_symbol='" + c.partySymbol + "',address='" +
+                      c.address + "',phone='" + c.phone + "' WHERE candidate_id=" + std::to_string(c.id);
+    return executeNonQuery(sql);
+}
+
+bool DatabaseManager::toggleCandidateStatus(int candidateId) {
+    std::string sql = "UPDATE candidates SET is_active = NOT is_active WHERE candidate_id=" +
+                      std::to_string(candidateId);
+    return executeNonQuery(sql);
+}
+
+// ============================================================
+//  Vote Results & Analytics
+// ============================================================
+std::vector<VoteResult> DatabaseManager::getResults(int electionId) {
+    std::vector<VoteResult> list;
+    SQLHSTMT hStmt; SQLAllocHandle(SQL_HANDLE_STMT,hDbc,&hStmt);
+    std::string sql = "SELECT candidate_id,candidate_name,party_name,candidate_constituency,"
+                      "total_votes,vote_percentage FROM v_vote_results WHERE election_id=" +
+                      std::to_string(electionId);
+    if (SQLExecDirect(hStmt,(SQLCHAR*)sql.c_str(),SQL_NTS)!=SQL_SUCCESS &&
+        SQLExecDirect(hStmt,(SQLCHAR*)sql.c_str(),SQL_NTS)!=SQL_SUCCESS_WITH_INFO) {
+        SQLFreeHandle(SQL_HANDLE_STMT,hStmt); return list;
+    }
+    char cid[16],cn[128],party[128],con[128],tv[16],vp[16]; SQLLEN len;
+    while (SQLFetch(hStmt)==SQL_SUCCESS) {
+        VoteResult r;
+        SQLGetData(hStmt,1,SQL_C_CHAR,cid,  sizeof(cid),  &len); r.candidateId   = atoi(cid);
+        SQLGetData(hStmt,2,SQL_C_CHAR,cn,   sizeof(cn),   &len); r.candidateName = cn;
+        SQLGetData(hStmt,3,SQL_C_CHAR,party,sizeof(party),&len); r.partyName     = party;
+        SQLGetData(hStmt,4,SQL_C_CHAR,con,  sizeof(con),  &len); r.constituency  = con;
+        SQLGetData(hStmt,5,SQL_C_CHAR,tv,   sizeof(tv),   &len); r.totalVotes    = atoi(tv);
+        SQLGetData(hStmt,6,SQL_C_CHAR,vp,   sizeof(vp),   &len); r.percentage    = atof(vp);
+        list.push_back(r);
+    }
+    SQLFreeHandle(SQL_HANDLE_STMT,hStmt); return list;
+}
+
+int DatabaseManager::getTotalVotesCast(int electionId) {
+    SQLHSTMT hStmt; SQLAllocHandle(SQL_HANDLE_STMT,hDbc,&hStmt);
+    std::string sql = "SELECT COUNT(*) FROM votes WHERE election_id=" + std::to_string(electionId);
+    int count = 0;
+    if (SQLExecDirect(hStmt,(SQLCHAR*)sql.c_str(),SQL_NTS)==SQL_SUCCESS ||
+        SQLExecDirect(hStmt,(SQLCHAR*)sql.c_str(),SQL_NTS)==SQL_SUCCESS_WITH_INFO) {
+        char cnt[16]; SQLLEN len;
+        if (SQLFetch(hStmt)==SQL_SUCCESS) {
+            SQLGetData(hStmt,1,SQL_C_CHAR,cnt,sizeof(cnt),&len);
+            count = atoi(cnt);
+        }
+    }
+    SQLFreeHandle(SQL_HANDLE_STMT,hStmt); return count;
+}
+
+// ============================================================
+//  Audit Log & Security Monitoring
+// ============================================================
+void DatabaseManager::logEvent(const std::string& eventType, const std::string& userType,
+                               int userId, const std::string& desc, const std::string& ip) {
+    std::string sql = "INSERT INTO audit_log (event_type,user_type,user_id,description,ip_address) "
+                      "VALUES ('" + eventType + "','" + userType + "'," + std::to_string(userId) +
+                      ",'" + desc + "','" + ip + "')";
+    executeNonQuery(sql);
+}
+
+std::vector<AuditEntry> DatabaseManager::getAuditLog(int limit) {
+    std::vector<AuditEntry> list;
+    SQLHSTMT hStmt; SQLAllocHandle(SQL_HANDLE_STMT,hDbc,&hStmt);
+    std::string sql = "SELECT log_id,event_type,user_type,COALESCE(description,''),COALESCE(ip_address,''),logged_at "
+                      "FROM audit_log ORDER BY log_id DESC LIMIT " + std::to_string(limit);
+    if (SQLExecDirect(hStmt,(SQLCHAR*)sql.c_str(),SQL_NTS)!=SQL_SUCCESS &&
+        SQLExecDirect(hStmt,(SQLCHAR*)sql.c_str(),SQL_NTS)!=SQL_SUCCESS_WITH_INFO) {
+        SQLFreeHandle(SQL_HANDLE_STMT,hStmt); return list;
+    }
+    char id[16],et[64],ut[16],desc[512],ip[64],ts[32]; SQLLEN len;
+    while (SQLFetch(hStmt)==SQL_SUCCESS) {
+        AuditEntry e;
+        SQLGetData(hStmt,1,SQL_C_CHAR,id,  sizeof(id),  &len); e.logId       = atoi(id);
+        SQLGetData(hStmt,2,SQL_C_CHAR,et,  sizeof(et),  &len); e.eventType   = et;
+        SQLGetData(hStmt,3,SQL_C_CHAR,ut,  sizeof(ut),  &len); e.userType    = ut;
+        SQLGetData(hStmt,4,SQL_C_CHAR,desc,sizeof(desc),&len); e.description = desc;
+        SQLGetData(hStmt,5,SQL_C_CHAR,ip,  sizeof(ip),  &len); e.ipAddress   = ip;
+        SQLGetData(hStmt,6,SQL_C_CHAR,ts,  sizeof(ts),  &len); e.loggedAt    = ts;
+        list.push_back(e);
+    }
+    SQLFreeHandle(SQL_HANDLE_STMT,hStmt); return list;
+}
+
+// ============================================================
+//  Suspicious Activity Detection & Anti-Cheat
+// ============================================================
+std::vector<AuditEntry> DatabaseManager::getSuspiciousActivity() {
+    std::vector<AuditEntry> list;
+    SQLHSTMT hStmt; SQLAllocHandle(SQL_HANDLE_STMT,hDbc,&hStmt);
+    std::string sql =
+        "SELECT 0 AS log_id, 'MULTI_IP_VOTE' AS event_type, 'VOTER' AS user_type, "
+        "CONCAT('IP ',ip_address,' cast ',COUNT(*),' votes in election #',election_id) AS description, "
+        "ip_address, MAX(voted_at) AS logged_at "
+        "FROM votes "
+        "GROUP BY ip_address, election_id "
+        "HAVING COUNT(*) > 1 "
+        "UNION ALL "
+        "SELECT 0,'FAILED_LOGIN','VOTER', "
+        "CONCAT(COUNT(*),' failed logins for NID ',nid_number,' in last hour'), "
+        "COALESCE(ip_address,''), MAX(attempt_time) "
+        "FROM login_attempts WHERE success=0 AND attempt_time > DATE_SUB(NOW(), INTERVAL 1 HOUR) "
+        "GROUP BY nid_number, ip_address HAVING COUNT(*) >= 3 "
+        "ORDER BY logged_at DESC";
+    if (SQLExecDirect(hStmt,(SQLCHAR*)sql.c_str(),SQL_NTS)!=SQL_SUCCESS &&
+        SQLExecDirect(hStmt,(SQLCHAR*)sql.c_str(),SQL_NTS)!=SQL_SUCCESS_WITH_INFO) {
+        SQLFreeHandle(SQL_HANDLE_STMT,hStmt); return list;
+    }
+    char id[16],et[64],ut[16],desc[512],ip[64],ts[32]; SQLLEN len;
+    while (SQLFetch(hStmt)==SQL_SUCCESS) {
+        AuditEntry e;
+        SQLGetData(hStmt,1,SQL_C_CHAR,id,  sizeof(id),  &len); e.logId       = atoi(id);
+        SQLGetData(hStmt,2,SQL_C_CHAR,et,  sizeof(et),  &len); e.eventType   = et;
+        SQLGetData(hStmt,3,SQL_C_CHAR,ut,  sizeof(ut),  &len); e.userType    = ut;
+        SQLGetData(hStmt,4,SQL_C_CHAR,desc,sizeof(desc),&len); e.description = desc;
+        SQLGetData(hStmt,5,SQL_C_CHAR,ip,  sizeof(ip),  &len); e.ipAddress   = ip;
+        SQLGetData(hStmt,6,SQL_C_CHAR,ts,  sizeof(ts),  &len); e.loggedAt    = ts;
+        list.push_back(e);
+    }
+    SQLFreeHandle(SQL_HANDLE_STMT,hStmt); return list;
+}
+
+void DatabaseManager::recordLoginAttempt(const std::string& nid, bool success) {
+    std::string sql = "INSERT INTO login_attempts (nid_number,success) VALUES ('" +
+                      nid + "'," + (success?"1":"0") + ")";
+    executeNonQuery(sql);
+}
+
+int DatabaseManager::getFailedLoginCount(const std::string& nid, int minutes) {
+    SQLHSTMT hStmt; SQLAllocHandle(SQL_HANDLE_STMT,hDbc,&hStmt);
+    std::string sql = "SELECT COUNT(*) FROM login_attempts WHERE nid_number='" + nid +
+                      "' AND success=0 AND attempt_time > DATE_SUB(NOW(), INTERVAL " +
+                      std::to_string(minutes) + " MINUTE)";
+    int count = 0;
+    if (SQLExecDirect(hStmt,(SQLCHAR*)sql.c_str(),SQL_NTS)==SQL_SUCCESS ||
+        SQLExecDirect(hStmt,(SQLCHAR*)sql.c_str(),SQL_NTS)==SQL_SUCCESS_WITH_INFO) {
+        char cnt[16]; SQLLEN len;
+        if (SQLFetch(hStmt)==SQL_SUCCESS) {
+            SQLGetData(hStmt,1,SQL_C_CHAR,cnt,sizeof(cnt),&len);
+            count = atoi(cnt);
+        }
+    }
+    SQLFreeHandle(SQL_HANDLE_STMT,hStmt); return count;
+}
